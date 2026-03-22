@@ -2,14 +2,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # HireRanker — Full deployment script
 # Provisions: Neon DB, Upstash Redis, Render (API + Worker), Vercel (Frontend)
-#
-# Usage:
-#   export NEON_API_KEY UPSTASH_API_KEY RENDER_API_KEY VERCEL_API_KEY ANTHROPIC_API_KEY
-#   ./deploy.sh
 # ─────────────────────────────────────────────────────────────────────────────
-set -uo pipefail   # no -e so we can show friendly errors
+set -uo pipefail
 
 : "${NEON_API_KEY:?'Set NEON_API_KEY'}"
+: "${UPSTASH_EMAIL:?'Set UPSTASH_EMAIL (your Upstash account email)'}"
 : "${UPSTASH_API_KEY:?'Set UPSTASH_API_KEY'}"
 : "${RENDER_API_KEY:?'Set RENDER_API_KEY'}"
 : "${VERCEL_API_KEY:?'Set VERCEL_API_KEY'}"
@@ -25,64 +22,63 @@ warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
 err()     { echo -e "${RED}[✗]${NC} $*" >&2; }
 section() { echo -e "\n${YELLOW}══ $* ══${NC}"; }
 
-# Helper: POST with full error output
-api_post() {
-  local label="$1"; local url="$2"; local data="$3"
+die() { err "$1"; exit 1; }
+
+api_call() {
+  local label="$1"; local method="$2"; local url="$3"
   shift 3
   local resp http_code tmp
   tmp=$(mktemp)
-  http_code=$(curl -s -o "$tmp" -w "%{http_code}" -X POST "$url" "$@" -d "$data")
+  http_code=$(curl -s -o "$tmp" -w "%{http_code}" -X "$method" "$url" "$@")
   resp=$(cat "$tmp"); rm -f "$tmp"
   if [[ "$http_code" -ge 400 ]]; then
-    err "$label failed (HTTP $http_code)"
-    echo "  Response: $resp" >&2
-    return 1
+    die "$label failed (HTTP $http_code): $resp"
   fi
   echo "$resp"
 }
 
-api_get() {
-  local label="$1"; local url="$2"
-  shift 2
-  local resp http_code tmp
-  tmp=$(mktemp)
-  http_code=$(curl -s -o "$tmp" -w "%{http_code}" "$url" "$@")
-  resp=$(cat "$tmp"); rm -f "$tmp"
-  if [[ "$http_code" -ge 400 ]]; then
-    err "$label failed (HTTP $http_code)"
-    echo "  Response: $resp" >&2
-    return 1
-  fi
-  echo "$resp"
-}
+api_post() { api_call "$1" POST "$2" "${@:3}"; }
+api_get()  { api_call "$1" GET  "$2" "${@:3}"; }
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "1/4 — Neon PostgreSQL"
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Neon requires org_id — fetch it first
+NEON_ORGS=$(api_get "Neon list orgs" \
+  "https://console.neon.tech/api/v2/organizations" \
+  -H "Authorization: Bearer $NEON_API_KEY")
+NEON_ORG_ID=$(echo "$NEON_ORGS" | jq -r '.organizations[0].id // empty')
+
+if [[ -z "$NEON_ORG_ID" || "$NEON_ORG_ID" == "null" ]]; then
+  # Fall back to personal account (no org)
+  NEON_PROJECT_BODY='{"project":{"name":"hireranker","pg_version":16,"region_id":"aws-us-east-2"}}'
+else
+  info "Neon org: $NEON_ORG_ID"
+  NEON_PROJECT_BODY=$(jq -n --arg oid "$NEON_ORG_ID" \
+    '{"project":{"name":"hireranker","pg_version":16,"region_id":"aws-us-east-2","org_id":$oid}}')
+fi
+
 NEON_RESPONSE=$(api_post "Neon create project" \
   "https://console.neon.tech/api/v2/projects" \
-  '{"project":{"name":"hireranker","pg_version":16,"region_id":"aws-us-east-2"}}' \
   -H "Authorization: Bearer $NEON_API_KEY" \
-  -H "Content-Type: application/json")
+  -H "Content-Type: application/json" \
+  -d "$NEON_PROJECT_BODY")
 
 NEON_PROJECT_ID=$(echo "$NEON_RESPONSE" | jq -r '.project.id')
 
-# Neon returns the connection string in connection_uris[].connection_uri
-# Extract host/db/user/password from the URI
+# Parse connection URI or fallback to connection_parameters
 NEON_URI=$(echo "$NEON_RESPONSE" | jq -r '.connection_uris[0].connection_uri // empty')
-if [[ -z "$NEON_URI" || "$NEON_URI" == "null" ]]; then
-  # Fallback: build from connection_parameters
-  DB_HOST=$(echo "$NEON_RESPONSE" | jq -r '.connection_uris[0].connection_parameters.host')
-  DB_NAME=$(echo "$NEON_RESPONSE" | jq -r '.connection_uris[0].connection_parameters.database')
-  DB_USER=$(echo "$NEON_RESPONSE" | jq -r '.connection_uris[0].connection_parameters.user')
-  DB_PASSWORD=$(echo "$NEON_RESPONSE" | jq -r '.connection_uris[0].connection_parameters.password')
-else
-  # Parse postgresql://user:pass@host/db
+if [[ -n "$NEON_URI" && "$NEON_URI" != "null" ]]; then
   DB_USER=$(echo "$NEON_URI"     | sed 's|postgresql://||' | cut -d: -f1)
   DB_PASSWORD=$(echo "$NEON_URI" | sed 's|postgresql://[^:]*:||' | cut -d@ -f1)
   DB_HOST=$(echo "$NEON_URI"     | cut -d@ -f2 | cut -d/ -f1 | cut -d: -f1)
   DB_NAME=$(echo "$NEON_URI"     | cut -d/ -f4 | cut -d? -f1)
+else
+  DB_HOST=$(echo "$NEON_RESPONSE"     | jq -r '.connection_uris[0].connection_parameters.host')
+  DB_NAME=$(echo "$NEON_RESPONSE"     | jq -r '.connection_uris[0].connection_parameters.database')
+  DB_USER=$(echo "$NEON_RESPONSE"     | jq -r '.connection_uris[0].connection_parameters.user')
+  DB_PASSWORD=$(echo "$NEON_RESPONSE" | jq -r '.connection_uris[0].connection_parameters.password')
 fi
 DB_PORT="5432"
 
@@ -92,12 +88,15 @@ info "DB: $DB_USER@$DB_HOST/$DB_NAME"
 # ─────────────────────────────────────────────────────────────────────────────
 section "2/4 — Upstash Redis"
 # ─────────────────────────────────────────────────────────────────────────────
+# Upstash Management API v2 uses HTTP Basic auth: email:api_key
+
+UPSTASH_AUTH=$(printf '%s:%s' "$UPSTASH_EMAIL" "$UPSTASH_API_KEY" | base64 -w0)
 
 UPSTASH_RESPONSE=$(api_post "Upstash create Redis" \
   "https://api.upstash.com/v2/redis/database" \
-  '{"name":"hireranker","region":"us-east-1","tls":true}' \
-  -H "Authorization: Bearer $UPSTASH_API_KEY" \
-  -H "Content-Type: application/json")
+  -H "Authorization: Basic $UPSTASH_AUTH" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"hireranker","region":"us-east-1","tls":true}')
 
 REDIS_ENDPOINT=$(echo "$UPSTASH_RESPONSE" | jq -r '.endpoint')
 REDIS_PORT=$(echo "$UPSTASH_RESPONSE"     | jq -r '.port')
@@ -112,11 +111,10 @@ info "Upstash Redis: $REDIS_ENDPOINT:$REDIS_PORT"
 # ─────────────────────────────────────────────────────────────────────────────
 section "3/4 — Render (web service + background worker)"
 # ─────────────────────────────────────────────────────────────────────────────
-
 warn "Repo: github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME  branch: $GITHUB_BRANCH"
 
-# Get Render owner ID (required for service creation)
-RENDER_OWNER=$(api_get "Render owner" "https://api.render.com/v1/owners?limit=1" \
+RENDER_OWNER=$(api_get "Render owner" \
+  "https://api.render.com/v1/owners?limit=1" \
   -H "Authorization: Bearer $RENDER_API_KEY" \
   -H "Accept: application/json")
 RENDER_OWNER_ID=$(echo "$RENDER_OWNER" | jq -r '.[0].owner.id // .[0].id')
@@ -149,8 +147,13 @@ COMMON_ENV=$(jq -n \
   ]')
 
 API_ENV=$(echo "$COMMON_ENV" | jq \
-  '. + [{"key":"ALLOWED_HOSTS","value":"hireranker-api.onrender.com"},{"key":"WEB_CONCURRENCY","value":"2"},{"key":"CORS_ALLOWED_ORIGINS","value":"https://hireranker.vercel.app"}]')
+  '. + [
+    {"key":"ALLOWED_HOSTS","value":"hireranker-api.onrender.com"},
+    {"key":"WEB_CONCURRENCY","value":"2"},
+    {"key":"CORS_ALLOWED_ORIGINS","value":"https://hireranker.vercel.app"}
+  ]')
 
+# Render API v1 requires "env" (runtime) inside serviceDetails
 API_PAYLOAD=$(jq -n \
   --arg oid "$RENDER_OWNER_ID" \
   --arg repo "https://github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME" \
@@ -164,8 +167,8 @@ API_PAYLOAD=$(jq -n \
     "repo": $repo,
     "rootDir": "backend",
     "serviceDetails": {
+      "env": "python",
       "buildCommand": "./build.sh",
-      "envSpecificDetails": {"buildCommand": "./build.sh"},
       "healthCheckPath": "/api/health/",
       "numInstances": 1,
       "plan": "starter",
@@ -177,10 +180,10 @@ API_PAYLOAD=$(jq -n \
 
 API_RESPONSE=$(api_post "Render web service" \
   "https://api.render.com/v1/services" \
-  "$API_PAYLOAD" \
   -H "Authorization: Bearer $RENDER_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Accept: application/json")
+  -H "Accept: application/json" \
+  -d "$API_PAYLOAD")
 
 API_SERVICE_ID=$(echo "$API_RESPONSE" | jq -r '.service.id // .id')
 API_URL="https://hireranker-api.onrender.com"
@@ -199,6 +202,7 @@ WORKER_PAYLOAD=$(jq -n \
     "repo": $repo,
     "rootDir": "backend",
     "serviceDetails": {
+      "env": "python",
       "buildCommand": "pip install -r requirements.txt",
       "numInstances": 1,
       "plan": "starter",
@@ -210,10 +214,10 @@ WORKER_PAYLOAD=$(jq -n \
 
 WORKER_RESPONSE=$(api_post "Render background worker" \
   "https://api.render.com/v1/services" \
-  "$WORKER_PAYLOAD" \
   -H "Authorization: Bearer $RENDER_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Accept: application/json")
+  -H "Accept: application/json" \
+  -d "$WORKER_PAYLOAD")
 
 WORKER_SERVICE_ID=$(echo "$WORKER_RESPONSE" | jq -r '.service.id // .id')
 info "Render worker: $WORKER_SERVICE_ID"
@@ -222,18 +226,40 @@ info "Render worker: $WORKER_SERVICE_ID"
 section "4/4 — Vercel (Next.js frontend)"
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERCEL_USER=$(api_get "Vercel auth" "https://api.vercel.com/v2/user" \
+VERCEL_USER=$(api_get "Vercel auth" \
+  "https://api.vercel.com/v2/user" \
   -H "Authorization: Bearer $VERCEL_API_KEY")
 VERCEL_USERNAME=$(echo "$VERCEL_USER" | jq -r '.user.username')
 info "Vercel user: $VERCEL_USERNAME"
 
+# Check for teams — project creation may need a teamId
+VERCEL_TEAMS=$(curl -s "https://api.vercel.com/v2/teams?limit=1" \
+  -H "Authorization: Bearer $VERCEL_API_KEY")
+VERCEL_TEAM_ID=$(echo "$VERCEL_TEAMS" | jq -r '.teams[0].id // empty')
+
+if [[ -n "$VERCEL_TEAM_ID" && "$VERCEL_TEAM_ID" != "null" ]]; then
+  info "Vercel team: $VERCEL_TEAM_ID"
+  VERCEL_QUERY="?teamId=${VERCEL_TEAM_ID}"
+else
+  VERCEL_QUERY=""
+fi
+
+# Get GitHub repo ID (required by Vercel gitSource)
+GH_REPO_INFO=$(curl -s "https://api.github.com/repos/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME")
+GH_REPO_ID=$(echo "$GH_REPO_INFO" | jq -r '.id')
+if [[ -z "$GH_REPO_ID" || "$GH_REPO_ID" == "null" ]]; then
+  die "Could not fetch GitHub repo ID for $GITHUB_REPO_OWNER/$GITHUB_REPO_NAME"
+fi
+info "GitHub repo ID: $GH_REPO_ID"
+
 VERCEL_PROJECT_PAYLOAD=$(jq -n \
   --arg repo "$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME" \
+  --argjson repoid "$GH_REPO_ID" \
   --arg apiurl "$API_URL" \
   '{
     "name": "hireranker",
     "framework": "nextjs",
-    "gitRepository": {"type": "github", "repo": $repo},
+    "gitRepository": {"type": "github", "repo": $repo, "repoId": $repoid},
     "rootDirectory": "frontend",
     "buildCommand": "npm run build",
     "outputDirectory": ".next",
@@ -245,28 +271,29 @@ VERCEL_PROJECT_PAYLOAD=$(jq -n \
   }')
 
 VERCEL_PROJECT=$(api_post "Vercel project" \
-  "https://api.vercel.com/v9/projects" \
-  "$VERCEL_PROJECT_PAYLOAD" \
+  "https://api.vercel.com/v9/projects${VERCEL_QUERY}" \
   -H "Authorization: Bearer $VERCEL_API_KEY" \
-  -H "Content-Type: application/json")
+  -H "Content-Type: application/json" \
+  -d "$VERCEL_PROJECT_PAYLOAD")
 
 VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
-VERCEL_URL="https://${VERCEL_USERNAME}-hireranker.vercel.app"
 info "Vercel project: $VERCEL_PROJECT_ID"
 
 # Trigger deployment
 DEPLOY_PAYLOAD=$(jq -n \
   --arg repo "$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME" \
+  --argjson repoid "$GH_REPO_ID" \
   --arg branch "$GITHUB_BRANCH" \
   --arg pid "$VERCEL_PROJECT_ID" \
-  '{"name":"hireranker","gitSource":{"type":"github","repo":$repo,"ref":$branch},"projectId":$pid,"target":"production"}')
+  '{"name":"hireranker","gitSource":{"type":"github","repo":$repo,"repoId":$repoid,"ref":$branch},"projectId":$pid,"target":"production"}')
 
 api_post "Vercel deploy" \
-  "https://api.vercel.com/v13/deployments" \
-  "$DEPLOY_PAYLOAD" \
+  "https://api.vercel.com/v13/deployments${VERCEL_QUERY}" \
   -H "Authorization: Bearer $VERCEL_API_KEY" \
-  -H "Content-Type: application/json" > /dev/null
+  -H "Content-Type: application/json" \
+  -d "$DEPLOY_PAYLOAD" > /dev/null
 
+VERCEL_URL="https://hireranker.vercel.app"
 info "Vercel deployment triggered  →  $VERCEL_URL"
 
 # ─────────────────────────────────────────────────────────────────────────────

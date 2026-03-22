@@ -15,6 +15,7 @@ jobs:
       - name: Run deploy script
         env:
           NEON_API_KEY:      ${{ secrets.NEON_API_KEY }}
+          UPSTASH_EMAIL:     ${{ secrets.UPSTASH_EMAIL }}
           UPSTASH_API_KEY:   ${{ secrets.UPSTASH_API_KEY }}
           RENDER_API_KEY:    ${{ secrets.RENDER_API_KEY }}
           VERCEL_API_KEY:    ${{ secrets.VERCEL_API_KEY }}
