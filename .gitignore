@@ -1,0 +1,240 @@
+# =============================================================================
+# HireRanker .gitignore
+# Python / Django / Node / Next.js / Docker
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Environment & Secrets
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.*.local
+.env.development
+.env.staging
+.env.production
+*.pem
+*.key
+*.p12
+secrets/
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.virtualenv/
+pythonenv*/
+pyvenv.cfg
+
+# Test / Coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyright
+pyrightconfig.json
+
+# Ruff / Flake8
+.ruff_cache/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+celery_worker.pid
+
+# Django
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+backend/staticfiles/
+backend/media/
+backend/collected_static/
+
+# -----------------------------------------------------------------------------
+# Node / Next.js
+# -----------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Next.js build output
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Next.js cache
+.next/
+out/
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# ESLint cache
+.eslintcache
+
+# Parcel cache
+.parcel-cache
+
+# Storybook
+storybook-static/
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+# Don't ignore docker-compose files (they're configuration, not secrets)
+# But ignore local overrides
+docker-compose.override.yml
+docker-compose.local.yml
+
+# -----------------------------------------------------------------------------
+# OS
+# -----------------------------------------------------------------------------
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.AppleDouble
+.LSOverride
+Icon
+
+# Linux
+*~
+.directory
+.Trash-*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# -----------------------------------------------------------------------------
+# Editors & IDEs
+# -----------------------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+*.sublime-project
+.history/
+.nova/
+
+# JetBrains
+*.iml
+*.iws
+out/
+.idea_modules/
+
+# -----------------------------------------------------------------------------
+# Logs & Temp Files
+# -----------------------------------------------------------------------------
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pids/
+*.pid
+*.seed
+*.pid.lock
+.node_repl_history
+*.tgz
+.yarn-integrity
+
+# -----------------------------------------------------------------------------
+# Data & Uploads (local dev)
+# -----------------------------------------------------------------------------
+uploads/
+media/
+data/*.csv
+data/*.pdf
+data/*.docx
+# Keep sample data
+!data/sample_candidates.csv
+!data/sample_jd.txt
+
+# -----------------------------------------------------------------------------
+# SSL Certificates (managed by certbot on server)
+# -----------------------------------------------------------------------------
+ssl/
+certbot/
+letsencrypt/
+
+# -----------------------------------------------------------------------------
+# Backup Files
+# -----------------------------------------------------------------------------
+*.bak
+*.backup
+*.sql
+*.dump
+backups/
+
+# -----------------------------------------------------------------------------
+# Misc
+# -----------------------------------------------------------------------------
+.history
+.turbo/
+.cache/
+tmp/
+temp/

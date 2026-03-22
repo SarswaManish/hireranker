@@ -1,0 +1,105 @@
+Senior Backend Engineer
+FinTrack — San Francisco, CA (Remote-friendly)
+
+About FinTrack
+--------------
+FinTrack is a Series B fintech startup building the next generation of spend
+management and financial automation tools for mid-market businesses. Our
+platform processes over $2B in transactions annually and serves 1,200+
+customers across North America. We are a team of 85, growing fast, and backed
+by Sequoia Capital and Andreessen Horowitz.
+
+Role Overview
+-------------
+We are looking for a Senior Backend Engineer to join our Core Platform team.
+You will design and build the APIs, data pipelines, and microservices that
+power FinTrack's transaction processing, reconciliation, and reporting
+capabilities. You will work closely with product managers, frontend engineers,
+and data scientists to ship reliable, scalable software in a regulated
+financial environment.
+
+This role requires someone who writes clean, well-tested code, cares deeply
+about system reliability, and can navigate the complexity of financial data
+with precision.
+
+What You'll Do
+--------------
+- Design, build, and maintain high-throughput REST and event-driven APIs
+  serving millions of financial transactions per day.
+- Own and evolve our core transaction processing service (Python/Django,
+  PostgreSQL, Kafka).
+- Lead backend architecture discussions and contribute to technical roadmap
+  planning.
+- Collaborate with the data engineering team to build real-time reconciliation
+  and reporting pipelines using dbt and Spark.
+- Ensure all systems meet PCI-DSS compliance requirements and pass SOC 2 Type
+  II audits.
+- Mentor junior and mid-level engineers through code reviews and pair
+  programming.
+- Participate in on-call rotation for production incidents (PagerDuty, roughly
+  1 week per quarter).
+- Contribute to internal developer tooling and CI/CD improvements.
+
+Requirements
+------------
+Must-have:
+- 5+ years of professional software engineering experience.
+- 3+ years building production backend systems with Python (Django or FastAPI).
+- Deep expertise with PostgreSQL — query optimization, indexing strategies,
+  migrations, and schema design for financial data.
+- Experience with asynchronous task processing (Celery, RQ, or similar).
+- Solid understanding of REST API design principles and HTTP semantics.
+- Experience with Docker and Kubernetes in a production environment.
+- Strong proficiency in Git and collaborative development workflows.
+- Experience writing comprehensive unit and integration tests (pytest).
+- Ability to communicate clearly in writing and in cross-functional meetings.
+
+Nice-to-have:
+- Experience with event streaming platforms (Apache Kafka, AWS Kinesis, or
+  similar).
+- Familiarity with financial industry standards: ISO 20022, ACH/wire
+  processing, PCI-DSS, SOC 2.
+- Experience with AWS services (RDS, SQS, S3, Lambda, ECS/EKS).
+- Knowledge of data warehousing and analytics pipelines (dbt, Snowflake,
+  Redshift).
+- Prior experience at a fintech, payments company, or bank.
+- Open source contributions or public GitHub portfolio.
+- Experience with Redis for caching and distributed locking.
+- Understanding of cryptography fundamentals as applied to secure API design.
+
+Tech Stack
+----------
+- Backend:   Python 3.11, Django 4.2, Django REST Framework, Celery
+- Databases: PostgreSQL 15, Redis 7
+- Messaging: Apache Kafka, AWS SQS
+- Cloud:     AWS (EKS, RDS Aurora, S3, CloudFront, Secrets Manager)
+- CI/CD:     GitHub Actions, ArgoCD
+- Monitoring:Datadog, PagerDuty, Sentry
+- Data:      dbt, Snowflake, Apache Spark (EMR)
+
+What We Offer
+-------------
+- Competitive salary: $180,000 – $230,000 base (depending on experience)
+- Equity: 0.05% – 0.15% options (4-year vest, 1-year cliff)
+- Remote-friendly: work from anywhere in the US; HQ in SF for those who prefer
+  it
+- Health, dental, and vision insurance (100% employee coverage)
+- $3,000/year learning & development budget
+- Home office stipend: $1,500 setup + $150/month
+- Generous PTO: 20 days + 11 federal holidays + your birthday
+- 401(k) with 4% company match
+- Parental leave: 16 weeks primary, 8 weeks secondary caregiver
+
+Interview Process
+-----------------
+1. Recruiter screen (30 min, Zoom)
+2. Technical phone screen with an engineer (60 min)
+3. Take-home coding exercise (3–4 hours, paid $200)
+4. Virtual on-site: system design + code review + culture fit (4 hours total)
+5. References + offer
+
+FinTrack is an equal-opportunity employer. We celebrate diversity and are
+committed to creating an inclusive environment for all employees.
+
+Apply at: careers.fintrack.io/senior-backend-engineer
+Questions: recruiting@fintrack.io
