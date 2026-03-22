@@ -221,11 +221,10 @@ MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10MB for CSV/XLSX
 MAX_RESUME_FILE_SIZE = 10 * 1024 * 1024  # 10MB per resume
 MAX_BULK_RESUME_FILES = 50
 
-# LLM Settings
-OPENAI_API_KEY = config('OPENAI_API_KEY', default='')
-OPENAI_BASE_URL = config('OPENAI_BASE_URL', default='https://api.openai.com/v1')
-OPENAI_DEFAULT_MODEL = config('OPENAI_DEFAULT_MODEL', default='gpt-4o')
-OPENAI_FAST_MODEL = config('OPENAI_FAST_MODEL', default='gpt-4o-mini')
+# LLM Settings (Anthropic Claude)
+ANTHROPIC_API_KEY = config('ANTHROPIC_API_KEY', default='')
+ANTHROPIC_DEFAULT_MODEL = config('ANTHROPIC_DEFAULT_MODEL', default='claude-sonnet-4-6')
+ANTHROPIC_FAST_MODEL = config('ANTHROPIC_FAST_MODEL', default='claude-haiku-4-5-20251001')
 
 # Stripe
 STRIPE_SECRET_KEY = config('STRIPE_SECRET_KEY', default='')

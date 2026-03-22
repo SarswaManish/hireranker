@@ -25,28 +25,24 @@ class LLMTimeoutError(LLMError):
 
 class LLMClient:
     """
-    OpenAI-compatible LLM client with retry logic and error handling.
-    Reads OPENAI_API_KEY and OPENAI_BASE_URL from Django settings.
+    Anthropic Claude client with retry logic and error handling.
+    Reads ANTHROPIC_API_KEY, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL
+    from Django settings.
     """
 
-    def __init__(self, provider: str = 'openai'):
-        self.provider = provider
-        self.api_key = settings.OPENAI_API_KEY
-        self.base_url = settings.OPENAI_BASE_URL
-        self.default_model = settings.OPENAI_DEFAULT_MODEL
-        self.fast_model = settings.OPENAI_FAST_MODEL
+    def __init__(self):
+        self.api_key = settings.ANTHROPIC_API_KEY
+        self.default_model = settings.ANTHROPIC_DEFAULT_MODEL
+        self.fast_model = settings.ANTHROPIC_FAST_MODEL
         self._client = None
 
     def _get_client(self):
         if self._client is None:
             try:
-                from openai import OpenAI
-                self._client = OpenAI(
-                    api_key=self.api_key,
-                    base_url=self.base_url,
-                )
+                import anthropic
+                self._client = anthropic.Anthropic(api_key=self.api_key)
             except ImportError:
-                raise LLMError("openai package is not installed. Run: pip install openai")
+                raise LLMError("anthropic package is not installed. Run: pip install anthropic")
         return self._client
 
     def complete(
@@ -61,11 +57,13 @@ class LLMClient:
         Send a chat completion request.
 
         Args:
-            messages: List of message dicts with 'role' and 'content'
-            model: Model identifier. Defaults to OPENAI_DEFAULT_MODEL
-            temperature: Sampling temperature (0-2)
+            messages: List of message dicts with 'role' and 'content'.
+                      A message with role='system' is extracted as the system prompt.
+            model: Model identifier. Defaults to ANTHROPIC_DEFAULT_MODEL
+            temperature: Sampling temperature (0-1 for Claude)
             max_tokens: Maximum tokens in response
-            response_format: Optional response format (e.g. {"type": "json_object"})
+            response_format: If {'type': 'json_object'}, instructs Claude to
+                             return only valid JSON.
 
         Returns:
             dict with keys: content (str), model (str), usage (dict), finish_reason (str)
@@ -73,36 +71,49 @@ class LLMClient:
         client = self._get_client()
         model = model or self.default_model
 
+        # Anthropic takes system as a top-level param, not a message role
+        system_parts = [m['content'] for m in messages if m['role'] == 'system']
+        user_messages = [m for m in messages if m['role'] != 'system']
+
+        system_prompt = '\n\n'.join(system_parts) if system_parts else None
+
+        # When structured JSON output is requested, append an explicit instruction
+        if response_format and response_format.get('type') == 'json_object':
+            json_instruction = 'Respond with valid JSON only. Do not include markdown, code fences, or any text outside the JSON object.'
+            system_prompt = f"{system_prompt}\n\n{json_instruction}" if system_prompt else json_instruction
+
         kwargs = {
             'model': model,
-            'messages': messages,
-            'temperature': temperature,
             'max_tokens': max_tokens,
+            'temperature': temperature,
+            'messages': user_messages,
         }
-
-        if response_format is not None:
-            kwargs['response_format'] = response_format
+        if system_prompt:
+            kwargs['system'] = system_prompt
 
         logger.debug(
             "LLM request: model=%s, messages=%d, temp=%s, max_tokens=%d",
-            model, len(messages), temperature, max_tokens
+            model, len(user_messages), temperature, max_tokens
         )
 
         start_time = time.time()
-        response = client.chat.completions.create(**kwargs)
+        response = client.messages.create(**kwargs)
         elapsed = time.time() - start_time
 
-        content = response.choices[0].message.content
-        finish_reason = response.choices[0].finish_reason
+        content = response.content[0].text
+        finish_reason = response.stop_reason  # 'end_turn', 'max_tokens', 'stop_sequence'
+
+        input_tokens = response.usage.input_tokens if response.usage else 0
+        output_tokens = response.usage.output_tokens if response.usage else 0
 
         logger.debug(
-            "LLM response: model=%s, finish_reason=%s, elapsed=%.2fs, "
-            "prompt_tokens=%d, completion_tokens=%d",
+            "LLM response: model=%s, stop_reason=%s, elapsed=%.2fs, "
+            "input_tokens=%d, output_tokens=%d",
             response.model,
             finish_reason,
             elapsed,
-            response.usage.prompt_tokens if response.usage else 0,
-            response.usage.completion_tokens if response.usage else 0,
+            input_tokens,
+            output_tokens,
         )
 
         return {
@@ -110,9 +121,9 @@ class LLMClient:
             'model': response.model,
             'finish_reason': finish_reason,
             'usage': {
-                'prompt_tokens': response.usage.prompt_tokens if response.usage else 0,
-                'completion_tokens': response.usage.completion_tokens if response.usage else 0,
-                'total_tokens': response.usage.total_tokens if response.usage else 0,
+                'prompt_tokens': input_tokens,
+                'completion_tokens': output_tokens,
+                'total_tokens': input_tokens + output_tokens,
             },
         }
 
@@ -128,19 +139,9 @@ class LLMClient:
     ) -> dict:
         """
         Send a chat completion request with exponential backoff retry.
-
-        Args:
-            messages: List of message dicts
-            model: Model identifier
-            temperature: Sampling temperature
-            max_tokens: Maximum tokens
-            response_format: Optional response format
-            max_retries: Maximum number of retry attempts
-            retry_delay: Base delay in seconds (exponential backoff)
-
-        Returns:
-            dict with response content and metadata
         """
+        import anthropic as _anthropic
+
         last_exception = None
 
         for attempt in range(max_retries + 1):
@@ -156,13 +157,12 @@ class LLMClient:
                 last_exception = exc
                 exc_type = type(exc).__name__
 
-                # Check for rate limit errors
-                is_rate_limit = (
+                is_rate_limit = isinstance(exc, _anthropic.RateLimitError) or (
                     'rate_limit' in str(exc).lower()
                     or 'rate limit' in str(exc).lower()
                     or '429' in str(exc)
                 )
-                is_timeout = (
+                is_timeout = isinstance(exc, _anthropic.APITimeoutError) or (
                     'timeout' in str(exc).lower()
                     or 'timed out' in str(exc).lower()
                 )
@@ -170,7 +170,7 @@ class LLMClient:
                 if attempt < max_retries:
                     delay = retry_delay * (2 ** attempt)
                     if is_rate_limit:
-                        delay = max(delay, 60)  # At least 60s for rate limits
+                        delay = max(delay, 60)
                         logger.warning(
                             "LLM rate limit hit (attempt %d/%d), retrying in %.0fs: %s",
                             attempt + 1, max_retries, delay, exc
