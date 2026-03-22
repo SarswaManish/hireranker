@@ -8,7 +8,10 @@ from .base import *
 DEBUG = False
 
 # Security
-SECURE_SSL_REDIRECT = True
+# Render terminates TLS at the load balancer and forwards via HTTP internally.
+# SECURE_PROXY_SSL_HEADER tells Django to trust X-Forwarded-Proto: https.
+# SECURE_SSL_REDIRECT is OFF because the redirect would loop on Render/Vercel.
+SECURE_SSL_REDIRECT = False
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
@@ -26,18 +29,39 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
-# S3 Storage
-AWS_S3_CUSTOM_DOMAIN = config('AWS_S3_CUSTOM_DOMAIN', default=f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com')
-AWS_S3_OBJECT_PARAMETERS = {
-    'CacheControl': 'max-age=86400',
-}
-AWS_LOCATION = 'media'
+# CORS — accept list from env (comma-separated Vercel/custom frontend URLs)
+CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
 
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/'
+# ── File Storage ──────────────────────────────────────────────────────────────
+# Set USE_S3=true + AWS_* vars to enable S3.
+# On Render free tier, leave USE_S3=false — files are stored locally but will
+# NOT persist across deploys (acceptable for MVP / demo use).
+USE_S3 = config('USE_S3', default='false', cast=lambda v: v.lower() == 'true')
 
-# Static files via whitenoise (already configured in base)
+if USE_S3:
+    AWS_S3_CUSTOM_DOMAIN = config(
+        'AWS_S3_CUSTOM_DOMAIN',
+        default=f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com',
+    )
+    AWS_S3_OBJECT_PARAMETERS = {'CacheControl': 'max-age=86400'}
+    AWS_LOCATION = 'media'
+    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    MEDIA_URL = f'https://{AWS_S3_CUSTOM_DOMAIN}/{AWS_LOCATION}/'
+else:
+    DEFAULT_FILE_STORAGE = 'django.core.files.storage.FileSystemStorage'
+    MEDIA_ROOT = BASE_DIR / 'media'
+    MEDIA_URL = '/media/'
+
+# Static files via whitenoise
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+# ── Redis / Celery ─────────────────────────────────────────────────────────────
+# Upstash Redis URLs start with rediss:// (TLS).
+# Pass ssl_cert_reqs=None to avoid cert validation issues on Upstash free tier.
+_redis_url = REDIS_URL  # already set from base via decouple
+if _redis_url.startswith('rediss://'):
+    _ssl_opts = {'ssl_cert_reqs': None}
+    CACHES['default']['OPTIONS']['CONNECTION_POOL_KWARGS'].update(_ssl_opts)
 
 # Email
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -48,7 +72,7 @@ EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
 DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='noreply@hireranker.com')
 
-# Celery - production settings
+# Celery
 CELERY_TASK_ALWAYS_EAGER = False
 
 # Sentry
@@ -56,13 +80,8 @@ if SENTRY_DSN:
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         integrations=[
-            DjangoIntegration(
-                transaction_style='url',
-                middleware_spans=True,
-            ),
-            CeleryIntegration(
-                monitor_beat_tasks=True,
-            ),
+            DjangoIntegration(transaction_style='url', middleware_spans=True),
+            CeleryIntegration(monitor_beat_tasks=True),
             RedisIntegration(),
         ],
         traces_sample_rate=config('SENTRY_TRACES_SAMPLE_RATE', default=0.1, cast=float),
@@ -72,14 +91,7 @@ if SENTRY_DSN:
         release=config('APP_VERSION', default='1.0.0'),
     )
 
-# Production logging - write to file as well
-LOGGING['handlers']['file'] = {
-    'class': 'logging.handlers.RotatingFileHandler',
-    'filename': BASE_DIR / 'logs' / 'hireranker.log',
-    'maxBytes': 1024 * 1024 * 10,
-    'backupCount': 10,
-    'formatter': 'verbose',
-}
-LOGGING['loggers']['apps']['handlers'] = ['console', 'file']
-LOGGING['loggers']['tasks']['handlers'] = ['console', 'file']
+# Logging — console only on Render (no writable log dir on free tier)
 LOGGING['root']['level'] = 'WARNING'
+LOGGING['loggers']['apps']['handlers'] = ['console']
+LOGGING['loggers']['tasks']['handlers'] = ['console']

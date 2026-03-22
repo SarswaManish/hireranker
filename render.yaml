@@ -1,0 +1,105 @@
+services:
+  # ── Django API (Gunicorn) ──────────────────────────────────────────────────
+  - type: web
+    name: hireranker-api
+    runtime: python
+    rootDir: backend
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120 --log-level info"
+    healthCheckPath: /api/health/
+    autoDeploy: true
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        value: hireranker-api.onrender.com
+      # Neon PostgreSQL — fill these from your Neon project dashboard
+      - key: DB_HOST
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      # Upstash Redis — use the rediss:// URL from your Upstash console
+      - key: REDIS_URL
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false       # same rediss:// URL
+      - key: CELERY_RESULT_BACKEND
+        sync: false       # same rediss:// URL
+      # OpenAI
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_DEFAULT_MODEL
+        value: gpt-4o-mini  # cheaper default; override if needed
+      - key: OPENAI_FAST_MODEL
+        value: gpt-4o-mini
+      # File storage — local (no S3 on free tier; uploads lost on redeploy)
+      - key: USE_S3
+        value: "false"
+      # Stripe (optional — leave blank to disable billing)
+      - key: STRIPE_SECRET_KEY
+        value: ""
+      - key: STRIPE_PUBLISHABLE_KEY
+        value: ""
+      - key: STRIPE_WEBHOOK_SECRET
+        value: ""
+      # CORS — set to your Vercel frontend URL after first deploy
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://hireranker.vercel.app
+      # Misc
+      - key: DJANGO_LOG_LEVEL
+        value: WARNING
+      - key: WEB_CONCURRENCY
+        value: "2"
+
+  # ── Celery Worker ─────────────────────────────────────────────────────────
+  - type: worker
+    name: hireranker-worker
+    runtime: python
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A celery_app worker -l info -Q resumes,evaluations,default --concurrency 1 --max-tasks-per-child 50"
+    autoDeploy: true
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SECRET_KEY
+        fromService:
+          name: hireranker-api
+          type: web
+          envVarKey: SECRET_KEY
+      - key: DB_HOST
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: REDIS_URL
+        sync: false
+      - key: CELERY_BROKER_URL
+        sync: false
+      - key: CELERY_RESULT_BACKEND
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_DEFAULT_MODEL
+        value: gpt-4o-mini
+      - key: OPENAI_FAST_MODEL
+        value: gpt-4o-mini
+      - key: USE_S3
+        value: "false"
