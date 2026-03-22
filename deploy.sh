@@ -96,7 +96,7 @@ UPSTASH_RESPONSE=$(api_post "Upstash create Redis" \
   "https://api.upstash.com/v2/redis/database" \
   -H "Authorization: Basic $UPSTASH_AUTH" \
   -H "Content-Type: application/json" \
-  -d '{"name":"hireranker","region":"us-east-1","tls":true}')
+  -d '{"name":"hireranker","tls":true}')
 
 REDIS_ENDPOINT=$(echo "$UPSTASH_RESPONSE" | jq -r '.endpoint')
 REDIS_PORT=$(echo "$UPSTASH_RESPONSE"     | jq -r '.port')
@@ -168,11 +168,13 @@ API_PAYLOAD=$(jq -n \
     "rootDir": "backend",
     "serviceDetails": {
       "env": "python",
-      "buildCommand": "./build.sh",
+      "envSpecificDetails": {
+        "buildCommand": "./build.sh",
+        "startCommand": "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120 --log-level info"
+      },
       "healthCheckPath": "/api/health/",
       "numInstances": 1,
-      "plan": "starter",
-      "startCommand": "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120 --log-level info"
+      "plan": "starter"
     },
     "type": "web_service",
     "envVars": $env
@@ -203,10 +205,12 @@ WORKER_PAYLOAD=$(jq -n \
     "rootDir": "backend",
     "serviceDetails": {
       "env": "python",
-      "buildCommand": "pip install -r requirements.txt",
+      "envSpecificDetails": {
+        "buildCommand": "pip install -r requirements.txt",
+        "startCommand": "celery -A celery_app worker -l info -Q resumes,evaluations,default --concurrency 1 --max-tasks-per-child 50"
+      },
       "numInstances": 1,
-      "plan": "starter",
-      "startCommand": "celery -A celery_app worker -l info -Q resumes,evaluations,default --concurrency 1 --max-tasks-per-child 50"
+      "plan": "starter"
     },
     "type": "background_worker",
     "envVars": $env
@@ -252,22 +256,17 @@ if [[ -z "$GH_REPO_ID" || "$GH_REPO_ID" == "null" ]]; then
 fi
 info "GitHub repo ID: $GH_REPO_ID"
 
+# Create Vercel project (without git integration — linking GitHub via API requires
+# OAuth scope; connect the repo once from vercel.com/dashboard after this runs)
 VERCEL_PROJECT_PAYLOAD=$(jq -n \
-  --arg repo "$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME" \
-  --argjson repoid "$GH_REPO_ID" \
   --arg apiurl "$API_URL" \
   '{
     "name": "hireranker",
     "framework": "nextjs",
-    "gitRepository": {"type": "github", "repo": $repo, "repoId": $repoid},
     "rootDirectory": "frontend",
     "buildCommand": "npm run build",
     "outputDirectory": ".next",
-    "installCommand": "npm install",
-    "environmentVariables": [
-      {"key":"NEXT_PUBLIC_API_URL","value":$apiurl,"type":"plain","target":["production","preview","development"]},
-      {"key":"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","value":"","type":"plain","target":["production","preview","development"]}
-    ]
+    "installCommand": "npm install"
   }')
 
 VERCEL_PROJECT=$(api_post "Vercel project" \
@@ -277,24 +276,27 @@ VERCEL_PROJECT=$(api_post "Vercel project" \
   -d "$VERCEL_PROJECT_PAYLOAD")
 
 VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
-info "Vercel project: $VERCEL_PROJECT_ID"
+VERCEL_PROJECT_NAME=$(echo "$VERCEL_PROJECT" | jq -r '.name')
+info "Vercel project: $VERCEL_PROJECT_ID  ($VERCEL_PROJECT_NAME)"
 
-# Trigger deployment
-DEPLOY_PAYLOAD=$(jq -n \
-  --arg repo "$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME" \
-  --argjson repoid "$GH_REPO_ID" \
-  --arg branch "$GITHUB_BRANCH" \
-  --arg pid "$VERCEL_PROJECT_ID" \
-  '{"name":"hireranker","gitSource":{"type":"github","repo":$repo,"repoId":$repoid,"ref":$branch},"projectId":$pid,"target":"production"}')
+# Set environment variables
+ENV_PAYLOAD=$(jq -n --arg apiurl "$API_URL" '[
+  {"key":"NEXT_PUBLIC_API_URL","value":$apiurl,"type":"plain","target":["production","preview","development"]},
+  {"key":"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","value":"","type":"plain","target":["production","preview","development"]}
+]')
 
-api_post "Vercel deploy" \
-  "https://api.vercel.com/v13/deployments${VERCEL_QUERY}" \
+api_post "Vercel env vars" \
+  "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env${VERCEL_QUERY}" \
   -H "Authorization: Bearer $VERCEL_API_KEY" \
   -H "Content-Type: application/json" \
-  -d "$DEPLOY_PAYLOAD" > /dev/null
+  -d "$ENV_PAYLOAD" > /dev/null
 
-VERCEL_URL="https://hireranker.vercel.app"
-info "Vercel deployment triggered  →  $VERCEL_URL"
+info "Vercel env vars set"
+
+VERCEL_URL="https://${VERCEL_PROJECT_NAME}.vercel.app"
+warn "ACTION REQUIRED: Connect GitHub repo in Vercel dashboard:"
+warn "  vercel.com/xwine/hireranker/settings/git"
+warn "  → connect  github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME  (frontend dir)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Done"
