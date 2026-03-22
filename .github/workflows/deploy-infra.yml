@@ -1,0 +1,25 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:   # triggered manually from GitHub Actions tab
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      - name: Run deploy script
+        env:
+          NEON_API_KEY:      ${{ secrets.NEON_API_KEY }}
+          UPSTASH_API_KEY:   ${{ secrets.UPSTASH_API_KEY }}
+          RENDER_API_KEY:    ${{ secrets.RENDER_API_KEY }}
+          VERCEL_API_KEY:    ${{ secrets.VERCEL_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_REPO_OWNER: SarswaManish
+          GITHUB_REPO_NAME:  hireranker
+          GITHUB_BRANCH:     main
+        run: chmod +x deploy.sh && ./deploy.sh
