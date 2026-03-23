@@ -108,13 +108,23 @@ UPSTASH_CREATE_CODE=$(curl -s -o "$UPSTASH_CREATE_TMP" -w "%{http_code}" \
 UPSTASH_RESPONSE=$(cat "$UPSTASH_CREATE_TMP"); rm -f "$UPSTASH_CREATE_TMP"
 
 if [[ "$UPSTASH_CREATE_CODE" -ge 400 ]]; then
-  # If name already exists, fetch the existing database
-  UPSTASH_LIST=$(curl -s "https://api.upstash.com/v2/redis/database" \
+  # If name already exists, list databases and find by name
+  UPSTASH_LIST_TMP=$(mktemp)
+  UPSTASH_LIST_CODE=$(curl -s -o "$UPSTASH_LIST_TMP" -w "%{http_code}" \
+    "https://api.upstash.com/v2/redis/database" \
     -H "Authorization: Basic $UPSTASH_AUTH")
-  UPSTASH_DB_ID=$(echo "$UPSTASH_LIST" | jq -r '[.[] | select(.database_name=="hireranker")] | .[0].database_id // empty')
-  if [[ -z "$UPSTASH_DB_ID" ]]; then
-    die "Upstash create Redis failed (HTTP $UPSTASH_CREATE_CODE): $UPSTASH_RESPONSE"
+  UPSTASH_LIST=$(cat "$UPSTASH_LIST_TMP"); rm -f "$UPSTASH_LIST_TMP"
+
+  UPSTASH_DB_ID=""
+  if [[ "$UPSTASH_LIST_CODE" -lt 400 ]] && echo "$UPSTASH_LIST" | jq -e 'type == "array"' > /dev/null 2>&1; then
+    UPSTASH_DB_ID=$(echo "$UPSTASH_LIST" | jq -r \
+      '[.[] | select(.database_name=="hireranker")] | .[0].database_id // empty')
   fi
+
+  if [[ -z "$UPSTASH_DB_ID" ]]; then
+    die "Upstash create Redis failed (HTTP $UPSTASH_CREATE_CODE): $UPSTASH_RESPONSE — list also failed (HTTP $UPSTASH_LIST_CODE). Delete the 'hireranker' DB from console.upstash.com and re-run."
+  fi
+
   UPSTASH_RESPONSE=$(curl -s "https://api.upstash.com/v2/redis/database/${UPSTASH_DB_ID}" \
     -H "Authorization: Basic $UPSTASH_AUTH")
   info "Upstash Redis (existing): $UPSTASH_DB_ID"
