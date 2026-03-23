@@ -6,6 +6,8 @@
 set -uo pipefail
 
 : "${NEON_API_KEY:?'Set NEON_API_KEY'}"
+# Optional — required only for org-based Neon accounts
+NEON_ORG_ID="${NEON_ORG_ID:-}"
 : "${UPSTASH_EMAIL:?'Set UPSTASH_EMAIL (your Upstash account email)'}"
 : "${UPSTASH_API_KEY:?'Set UPSTASH_API_KEY'}"
 : "${RENDER_API_KEY:?'Set RENDER_API_KEY'}"
@@ -44,19 +46,14 @@ api_get()  { api_call "$1" GET  "$2" "${@:3}"; }
 section "1/4 — Neon PostgreSQL"
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Neon requires org_id — fetch it first
-NEON_ORGS=$(api_get "Neon list orgs" \
-  "https://console.neon.tech/api/v2/organizations" \
-  -H "Authorization: Bearer $NEON_API_KEY")
-NEON_ORG_ID=$(echo "$NEON_ORGS" | jq -r '.organizations[0].id // empty')
-
-if [[ -z "$NEON_ORG_ID" || "$NEON_ORG_ID" == "null" ]]; then
-  # Fall back to personal account (no org)
-  NEON_PROJECT_BODY='{"project":{"name":"hireranker","pg_version":16,"region_id":"aws-us-east-2"}}'
-else
+# Build project payload — include org_id only when NEON_ORG_ID env var is set
+# (required for org-based accounts; omit for personal accounts)
+if [[ -n "$NEON_ORG_ID" ]]; then
   info "Neon org: $NEON_ORG_ID"
   NEON_PROJECT_BODY=$(jq -n --arg oid "$NEON_ORG_ID" \
     '{"project":{"name":"hireranker","pg_version":16,"region_id":"aws-us-east-2","org_id":$oid}}')
+else
+  NEON_PROJECT_BODY='{"project":{"name":"hireranker","pg_version":16,"region_id":"aws-us-east-2"}}'
 fi
 
 NEON_RESPONSE=$(api_post "Neon create project" \
@@ -96,7 +93,7 @@ UPSTASH_RESPONSE=$(api_post "Upstash create Redis" \
   "https://api.upstash.com/v2/redis/database" \
   -H "Authorization: Basic $UPSTASH_AUTH" \
   -H "Content-Type: application/json" \
-  -d '{"name":"hireranker","tls":true}')
+  -d '{"name":"hireranker","platform":"aws","primary_region":"us-east-1","tls":true}')
 
 REDIS_ENDPOINT=$(echo "$UPSTASH_RESPONSE" | jq -r '.endpoint')
 REDIS_PORT=$(echo "$UPSTASH_RESPONSE"     | jq -r '.port')
@@ -174,7 +171,7 @@ API_PAYLOAD=$(jq -n \
       },
       "healthCheckPath": "/api/health/",
       "numInstances": 1,
-      "plan": "starter"
+      "plan": "free"
     },
     "type": "web_service",
     "envVars": $env
@@ -210,7 +207,7 @@ WORKER_PAYLOAD=$(jq -n \
         "startCommand": "celery -A celery_app worker -l info -Q resumes,evaluations,default --concurrency 1 --max-tasks-per-child 50"
       },
       "numInstances": 1,
-      "plan": "starter"
+      "plan": "free"
     },
     "type": "background_worker",
     "envVars": $env
@@ -256,11 +253,20 @@ if [[ -z "$GH_REPO_ID" || "$GH_REPO_ID" == "null" ]]; then
 fi
 info "GitHub repo ID: $GH_REPO_ID"
 
-# Create Vercel project (without git integration — linking GitHub via API requires
-# OAuth scope; connect the repo once from vercel.com/dashboard after this runs)
-VERCEL_PROJECT_PAYLOAD=$(jq -n \
-  --arg apiurl "$API_URL" \
-  '{
+# Try to find an existing project first (idempotent)
+VERCEL_EXISTING=$(curl -s -o /dev/null -w "%{http_code}" \
+  "https://api.vercel.com/v9/projects/hireranker${VERCEL_QUERY}" \
+  -H "Authorization: Bearer $VERCEL_API_KEY")
+
+if [[ "$VERCEL_EXISTING" == "200" ]]; then
+  VERCEL_PROJECT=$(curl -s "https://api.vercel.com/v9/projects/hireranker${VERCEL_QUERY}" \
+    -H "Authorization: Bearer $VERCEL_API_KEY")
+  VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
+  VERCEL_PROJECT_NAME=$(echo "$VERCEL_PROJECT" | jq -r '.name')
+  info "Vercel project (existing): $VERCEL_PROJECT_ID  ($VERCEL_PROJECT_NAME)"
+else
+  # Create without teamId first (personal-scope create works even on team tokens)
+  VERCEL_PROJECT_PAYLOAD=$(jq -n '{
     "name": "hireranker",
     "framework": "nextjs",
     "rootDirectory": "frontend",
@@ -269,15 +275,31 @@ VERCEL_PROJECT_PAYLOAD=$(jq -n \
     "installCommand": "npm install"
   }')
 
-VERCEL_PROJECT=$(api_post "Vercel project" \
-  "https://api.vercel.com/v9/projects${VERCEL_QUERY}" \
-  -H "Authorization: Bearer $VERCEL_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "$VERCEL_PROJECT_PAYLOAD")
+  VERCEL_CREATE_TMP=$(mktemp)
+  VERCEL_CREATE_CODE=$(curl -s -o "$VERCEL_CREATE_TMP" -w "%{http_code}" \
+    -X POST "https://api.vercel.com/v9/projects" \
+    -H "Authorization: Bearer $VERCEL_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$VERCEL_PROJECT_PAYLOAD")
+  VERCEL_PROJECT=$(cat "$VERCEL_CREATE_TMP"); rm -f "$VERCEL_CREATE_TMP"
 
-VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
-VERCEL_PROJECT_NAME=$(echo "$VERCEL_PROJECT" | jq -r '.name')
-info "Vercel project: $VERCEL_PROJECT_ID  ($VERCEL_PROJECT_NAME)"
+  if [[ "$VERCEL_CREATE_CODE" -ge 400 ]]; then
+    # Retry with teamId if available
+    if [[ -n "$VERCEL_QUERY" ]]; then
+      VERCEL_PROJECT=$(api_post "Vercel project" \
+        "https://api.vercel.com/v9/projects${VERCEL_QUERY}" \
+        -H "Authorization: Bearer $VERCEL_API_KEY" \
+        -H "Content-Type: application/json" \
+        -d "$VERCEL_PROJECT_PAYLOAD")
+    else
+      die "Vercel project failed (HTTP $VERCEL_CREATE_CODE): $VERCEL_PROJECT"
+    fi
+  fi
+
+  VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
+  VERCEL_PROJECT_NAME=$(echo "$VERCEL_PROJECT" | jq -r '.name')
+  info "Vercel project: $VERCEL_PROJECT_ID  ($VERCEL_PROJECT_NAME)"
+fi
 
 # Set environment variables
 ENV_PAYLOAD=$(jq -n --arg apiurl "$API_URL" '[
@@ -293,10 +315,10 @@ api_post "Vercel env vars" \
 
 info "Vercel env vars set"
 
-VERCEL_URL="https://${VERCEL_PROJECT_NAME}.vercel.app"
+VERCEL_URL="https://${VERCEL_PROJECT_NAME:-hireranker}.vercel.app"
 warn "ACTION REQUIRED: Connect GitHub repo in Vercel dashboard:"
-warn "  vercel.com/xwine/hireranker/settings/git"
-warn "  → connect  github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME  (frontend dir)"
+warn "  vercel.com/${VERCEL_USERNAME}/hireranker/settings/git"
+warn "  → connect  github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME  (root dir: frontend)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Done"
