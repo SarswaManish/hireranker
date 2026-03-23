@@ -9,7 +9,7 @@ echo "==> Collecting static files..."
 python manage.py collectstatic --noinput
 
 echo "==> Creating migration files..."
-python manage.py makemigrations --noinput
+python manage.py makemigrations core accounts organizations projects candidates resumes evaluations billing exports --noinput
 
 echo "==> Running database migrations..."
 python manage.py migrate --noinput
