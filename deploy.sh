@@ -46,8 +46,17 @@ api_get()  { api_call "$1" GET  "$2" "${@:3}"; }
 section "1/4 — Neon PostgreSQL"
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Build project payload — include org_id only when NEON_ORG_ID env var is set
-# (required for org-based accounts; omit for personal accounts)
+# Build project payload — include org_id when available.
+# For org-based accounts, org_id is required. Auto-discover from existing
+# projects, or fall back to the NEON_ORG_ID env var / secret.
+if [[ -z "$NEON_ORG_ID" ]]; then
+  NEON_PROJECTS_RESP=$(curl -s \
+    "https://console.neon.tech/api/v2/projects?limit=20" \
+    -H "Authorization: Bearer $NEON_API_KEY")
+  NEON_ORG_ID=$(echo "$NEON_PROJECTS_RESP" | jq -r \
+    '[.projects[]? | select(.org_id? and .org_id != null and .org_id != "")] | .[0].org_id // empty')
+fi
+
 if [[ -n "$NEON_ORG_ID" ]]; then
   info "Neon org: $NEON_ORG_ID"
   NEON_PROJECT_BODY=$(jq -n --arg oid "$NEON_ORG_ID" \
@@ -213,15 +222,25 @@ WORKER_PAYLOAD=$(jq -n \
     "envVars": $env
   }')
 
-WORKER_RESPONSE=$(api_post "Render background worker" \
-  "https://api.render.com/v1/services" \
+WORKER_TMP=$(mktemp)
+WORKER_CODE=$(curl -s -o "$WORKER_TMP" -w "%{http_code}" \
+  -X POST "https://api.render.com/v1/services" \
   -H "Authorization: Bearer $RENDER_API_KEY" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -d "$WORKER_PAYLOAD")
+WORKER_RESPONSE=$(cat "$WORKER_TMP"); rm -f "$WORKER_TMP"
 
-WORKER_SERVICE_ID=$(echo "$WORKER_RESPONSE" | jq -r '.service.id // .id')
-info "Render worker: $WORKER_SERVICE_ID"
+if [[ "$WORKER_CODE" -ge 400 ]]; then
+  err "Render background worker failed (HTTP $WORKER_CODE): $WORKER_RESPONSE"
+  warn "Celery worker skipped — background workers require a paid Render plan."
+  warn "Add a card at https://dashboard.render.com/billing, then re-run or"
+  warn "create the worker manually (rootDir: backend, start: celery -A celery_app worker)."
+  WORKER_SERVICE_ID=""
+else
+  WORKER_SERVICE_ID=$(echo "$WORKER_RESPONSE" | jq -r '.service.id // .id')
+  info "Render worker: $WORKER_SERVICE_ID"
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "4/4 — Vercel (Next.js frontend)"
@@ -253,19 +272,22 @@ if [[ -z "$GH_REPO_ID" || "$GH_REPO_ID" == "null" ]]; then
 fi
 info "GitHub repo ID: $GH_REPO_ID"
 
-# Try to find an existing project first (idempotent)
-VERCEL_EXISTING=$(curl -s -o /dev/null -w "%{http_code}" \
+VERCEL_PROJECT_ID=""
+VERCEL_PROJECT_NAME=""
+VERCEL_SKIP=false
+
+# Check for existing project first (idempotent re-runs)
+VERCEL_EXISTING_TMP=$(mktemp)
+VERCEL_EXISTING_CODE=$(curl -s -o "$VERCEL_EXISTING_TMP" -w "%{http_code}" \
   "https://api.vercel.com/v9/projects/hireranker${VERCEL_QUERY}" \
   -H "Authorization: Bearer $VERCEL_API_KEY")
+VERCEL_EXISTING_BODY=$(cat "$VERCEL_EXISTING_TMP"); rm -f "$VERCEL_EXISTING_TMP"
 
-if [[ "$VERCEL_EXISTING" == "200" ]]; then
-  VERCEL_PROJECT=$(curl -s "https://api.vercel.com/v9/projects/hireranker${VERCEL_QUERY}" \
-    -H "Authorization: Bearer $VERCEL_API_KEY")
-  VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
-  VERCEL_PROJECT_NAME=$(echo "$VERCEL_PROJECT" | jq -r '.name')
+if [[ "$VERCEL_EXISTING_CODE" == "200" ]]; then
+  VERCEL_PROJECT_ID=$(echo "$VERCEL_EXISTING_BODY" | jq -r '.id')
+  VERCEL_PROJECT_NAME=$(echo "$VERCEL_EXISTING_BODY" | jq -r '.name')
   info "Vercel project (existing): $VERCEL_PROJECT_ID  ($VERCEL_PROJECT_NAME)"
 else
-  # Create without teamId first (personal-scope create works even on team tokens)
   VERCEL_PROJECT_PAYLOAD=$(jq -n '{
     "name": "hireranker",
     "framework": "nextjs",
@@ -275,50 +297,51 @@ else
     "installCommand": "npm install"
   }')
 
-  VERCEL_CREATE_TMP=$(mktemp)
-  VERCEL_CREATE_CODE=$(curl -s -o "$VERCEL_CREATE_TMP" -w "%{http_code}" \
-    -X POST "https://api.vercel.com/v9/projects" \
-    -H "Authorization: Bearer $VERCEL_API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "$VERCEL_PROJECT_PAYLOAD")
-  VERCEL_PROJECT=$(cat "$VERCEL_CREATE_TMP"); rm -f "$VERCEL_CREATE_TMP"
+  # Try personal scope first, then team scope
+  for query in "" "$VERCEL_QUERY"; do
+    VERCEL_CREATE_TMP=$(mktemp)
+    VERCEL_CREATE_CODE=$(curl -s -o "$VERCEL_CREATE_TMP" -w "%{http_code}" \
+      -X POST "https://api.vercel.com/v9/projects${query}" \
+      -H "Authorization: Bearer $VERCEL_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "$VERCEL_PROJECT_PAYLOAD")
+    VERCEL_PROJECT=$(cat "$VERCEL_CREATE_TMP"); rm -f "$VERCEL_CREATE_TMP"
+    [[ "$VERCEL_CREATE_CODE" -lt 400 ]] && break
+  done
 
   if [[ "$VERCEL_CREATE_CODE" -ge 400 ]]; then
-    # Retry with teamId if available
-    if [[ -n "$VERCEL_QUERY" ]]; then
-      VERCEL_PROJECT=$(api_post "Vercel project" \
-        "https://api.vercel.com/v9/projects${VERCEL_QUERY}" \
-        -H "Authorization: Bearer $VERCEL_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d "$VERCEL_PROJECT_PAYLOAD")
-    else
-      die "Vercel project failed (HTTP $VERCEL_CREATE_CODE): $VERCEL_PROJECT"
-    fi
+    err "Vercel project failed (HTTP $VERCEL_CREATE_CODE): $VERCEL_PROJECT"
+    warn "Vercel project could not be created automatically (token lacks create-project scope)."
+    warn "Create it manually at vercel.com/new, import github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME,"
+    warn "set Root Directory to 'frontend', and add env var NEXT_PUBLIC_API_URL=$API_URL"
+    VERCEL_SKIP=true
+  else
+    VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
+    VERCEL_PROJECT_NAME=$(echo "$VERCEL_PROJECT" | jq -r '.name')
+    info "Vercel project: $VERCEL_PROJECT_ID  ($VERCEL_PROJECT_NAME)"
   fi
-
-  VERCEL_PROJECT_ID=$(echo "$VERCEL_PROJECT" | jq -r '.id')
-  VERCEL_PROJECT_NAME=$(echo "$VERCEL_PROJECT" | jq -r '.name')
-  info "Vercel project: $VERCEL_PROJECT_ID  ($VERCEL_PROJECT_NAME)"
 fi
 
-# Set environment variables
-ENV_PAYLOAD=$(jq -n --arg apiurl "$API_URL" '[
-  {"key":"NEXT_PUBLIC_API_URL","value":$apiurl,"type":"plain","target":["production","preview","development"]},
-  {"key":"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","value":"","type":"plain","target":["production","preview","development"]}
-]')
-
-api_post "Vercel env vars" \
-  "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env${VERCEL_QUERY}" \
-  -H "Authorization: Bearer $VERCEL_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d "$ENV_PAYLOAD" > /dev/null
-
-info "Vercel env vars set"
+if [[ "$VERCEL_SKIP" != "true" && -n "$VERCEL_PROJECT_ID" ]]; then
+  ENV_PAYLOAD=$(jq -n --arg apiurl "$API_URL" '[
+    {"key":"NEXT_PUBLIC_API_URL","value":$apiurl,"type":"plain","target":["production","preview","development"]},
+    {"key":"NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY","value":"","type":"plain","target":["production","preview","development"]}
+  ]')
+  VERCEL_ENV_TMP=$(mktemp)
+  VERCEL_ENV_CODE=$(curl -s -o "$VERCEL_ENV_TMP" -w "%{http_code}" \
+    -X POST "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env${VERCEL_QUERY}" \
+    -H "Authorization: Bearer $VERCEL_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$ENV_PAYLOAD")
+  rm -f "$VERCEL_ENV_TMP"
+  [[ "$VERCEL_ENV_CODE" -lt 400 ]] && info "Vercel env vars set" \
+    || warn "Vercel env vars failed (HTTP $VERCEL_ENV_CODE) — set manually in dashboard"
+  warn "ACTION REQUIRED: Connect GitHub repo in Vercel dashboard:"
+  warn "  vercel.com/${VERCEL_USERNAME}/hireranker/settings/git"
+  warn "  → connect  github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME  (root dir: frontend)"
+fi
 
 VERCEL_URL="https://${VERCEL_PROJECT_NAME:-hireranker}.vercel.app"
-warn "ACTION REQUIRED: Connect GitHub repo in Vercel dashboard:"
-warn "  vercel.com/${VERCEL_USERNAME}/hireranker/settings/git"
-warn "  → connect  github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME  (root dir: frontend)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Done"

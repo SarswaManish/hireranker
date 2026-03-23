@@ -15,6 +15,10 @@ jobs:
       - name: Run deploy script
         env:
           NEON_API_KEY:      ${{ secrets.NEON_API_KEY }}
+          # NEON_ORG_ID is required for org-based Neon accounts.
+          # Find it at: console.neon.tech → Organization Settings → General.
+          # Leave unset for personal Neon accounts.
+          NEON_ORG_ID:       ${{ secrets.NEON_ORG_ID }}
           UPSTASH_EMAIL:     ${{ secrets.UPSTASH_EMAIL }}
           UPSTASH_API_KEY:   ${{ secrets.UPSTASH_API_KEY }}
           RENDER_API_KEY:    ${{ secrets.RENDER_API_KEY }}
