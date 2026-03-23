@@ -98,11 +98,27 @@ section "2/4 — Upstash Redis"
 
 UPSTASH_AUTH=$(printf '%s:%s' "$UPSTASH_EMAIL" "$UPSTASH_API_KEY" | base64 -w0)
 
-UPSTASH_RESPONSE=$(api_post "Upstash create Redis" \
-  "https://api.upstash.com/v2/redis/database" \
+# Create or reuse existing Upstash database (idempotent)
+UPSTASH_CREATE_TMP=$(mktemp)
+UPSTASH_CREATE_CODE=$(curl -s -o "$UPSTASH_CREATE_TMP" -w "%{http_code}" \
+  -X POST "https://api.upstash.com/v2/redis/database" \
   -H "Authorization: Basic $UPSTASH_AUTH" \
   -H "Content-Type: application/json" \
   -d '{"name":"hireranker","platform":"aws","primary_region":"us-east-1","tls":true}')
+UPSTASH_RESPONSE=$(cat "$UPSTASH_CREATE_TMP"); rm -f "$UPSTASH_CREATE_TMP"
+
+if [[ "$UPSTASH_CREATE_CODE" -ge 400 ]]; then
+  # If name already exists, fetch the existing database
+  UPSTASH_LIST=$(curl -s "https://api.upstash.com/v2/redis/database" \
+    -H "Authorization: Basic $UPSTASH_AUTH")
+  UPSTASH_DB_ID=$(echo "$UPSTASH_LIST" | jq -r '[.[] | select(.database_name=="hireranker")] | .[0].database_id // empty')
+  if [[ -z "$UPSTASH_DB_ID" ]]; then
+    die "Upstash create Redis failed (HTTP $UPSTASH_CREATE_CODE): $UPSTASH_RESPONSE"
+  fi
+  UPSTASH_RESPONSE=$(curl -s "https://api.upstash.com/v2/redis/database/${UPSTASH_DB_ID}" \
+    -H "Authorization: Basic $UPSTASH_AUTH")
+  info "Upstash Redis (existing): $UPSTASH_DB_ID"
+fi
 
 REDIS_ENDPOINT=$(echo "$UPSTASH_RESPONSE" | jq -r '.endpoint')
 REDIS_PORT=$(echo "$UPSTASH_RESPONSE"     | jq -r '.port')
@@ -186,14 +202,31 @@ API_PAYLOAD=$(jq -n \
     "envVars": $env
   }')
 
-API_RESPONSE=$(api_post "Render web service" \
-  "https://api.render.com/v1/services" \
+# Create or reuse existing Render web service (idempotent)
+RENDER_API_TMP=$(mktemp)
+RENDER_API_CODE=$(curl -s -o "$RENDER_API_TMP" -w "%{http_code}" \
+  -X POST "https://api.render.com/v1/services" \
   -H "Authorization: Bearer $RENDER_API_KEY" \
   -H "Content-Type: application/json" \
   -H "Accept: application/json" \
   -d "$API_PAYLOAD")
+API_RESPONSE=$(cat "$RENDER_API_TMP"); rm -f "$RENDER_API_TMP"
 
-API_SERVICE_ID=$(echo "$API_RESPONSE" | jq -r '.service.id // .id')
+if [[ "$RENDER_API_CODE" -ge 400 ]]; then
+  # If name already in use, look up the existing service
+  RENDER_SERVICES=$(curl -s \
+    "https://api.render.com/v1/services?name=hireranker-api&limit=5" \
+    -H "Authorization: Bearer $RENDER_API_KEY" \
+    -H "Accept: application/json")
+  API_SERVICE_ID=$(echo "$RENDER_SERVICES" | jq -r \
+    '[.[] | select(.service.name=="hireranker-api")] | .[0].service.id // empty')
+  if [[ -z "$API_SERVICE_ID" ]]; then
+    die "Render web service failed (HTTP $RENDER_API_CODE): $API_RESPONSE"
+  fi
+  info "Render API service (existing): $API_SERVICE_ID"
+else
+  API_SERVICE_ID=$(echo "$API_RESPONSE" | jq -r '.service.id // .id')
+fi
 API_URL="https://hireranker-api.onrender.com"
 info "Render API service: $API_SERVICE_ID  →  $API_URL"
 
