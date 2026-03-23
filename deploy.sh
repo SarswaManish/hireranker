@@ -240,50 +240,9 @@ fi
 API_URL="https://hireranker-api.onrender.com"
 info "Render API service: $API_SERVICE_ID  →  $API_URL"
 
-WORKER_PAYLOAD=$(jq -n \
-  --arg oid "$RENDER_OWNER_ID" \
-  --arg repo "https://github.com/$GITHUB_REPO_OWNER/$GITHUB_REPO_NAME" \
-  --arg branch "$GITHUB_BRANCH" \
-  --argjson env "$COMMON_ENV" \
-  '{
-    "autoDeploy": "yes",
-    "branch": $branch,
-    "name": "hireranker-worker",
-    "ownerId": $oid,
-    "repo": $repo,
-    "rootDir": "backend",
-    "serviceDetails": {
-      "env": "python",
-      "envSpecificDetails": {
-        "buildCommand": "pip install -r requirements.txt",
-        "startCommand": "celery -A celery_app worker -l info -Q resumes,evaluations,default --concurrency 1 --max-tasks-per-child 50"
-      },
-      "numInstances": 1,
-      "plan": "free"
-    },
-    "type": "background_worker",
-    "envVars": $env
-  }')
-
-WORKER_TMP=$(mktemp)
-WORKER_CODE=$(curl -s -o "$WORKER_TMP" -w "%{http_code}" \
-  -X POST "https://api.render.com/v1/services" \
-  -H "Authorization: Bearer $RENDER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json" \
-  -d "$WORKER_PAYLOAD")
-WORKER_RESPONSE=$(cat "$WORKER_TMP"); rm -f "$WORKER_TMP"
-
-if [[ "$WORKER_CODE" -ge 400 ]]; then
-  err "Render background worker failed (HTTP $WORKER_CODE): $WORKER_RESPONSE"
-  warn "Celery worker skipped — background workers require a paid Render plan."
-  warn "Add a card at https://dashboard.render.com/billing, then re-run or"
-  warn "create the worker manually (rootDir: backend, start: celery -A celery_app worker)."
-  WORKER_SERVICE_ID=""
-else
-  WORKER_SERVICE_ID=$(echo "$WORKER_RESPONSE" | jq -r '.service.id // .id')
-  info "Render worker: $WORKER_SERVICE_ID"
-fi
+# Celery runs inside the web service via supervisord (see backend/supervisord.conf)
+# No separate background worker service needed.
+info "Render worker: running inside web service via supervisord"
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "4/4 — Vercel (Next.js frontend)"
