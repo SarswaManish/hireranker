@@ -240,6 +240,16 @@ fi
 API_URL="https://hireranker-api.onrender.com"
 info "Render API service: $API_SERVICE_ID  →  $API_URL"
 
+# Always sync env vars to the service (covers both new and existing services)
+RENDER_ENVVARS=$(echo "$API_ENV" | jq '[.[] | {key: .key, value: .value}]')
+curl -s -o /dev/null -X PUT \
+  "https://api.render.com/v1/services/${API_SERVICE_ID}/env-vars" \
+  -H "Authorization: Bearer $RENDER_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d "$RENDER_ENVVARS"
+info "Render env vars synced"
+
 # Celery runs inside the web service via supervisord (see backend/supervisord.conf)
 # No separate background worker service needed.
 info "Render worker: running inside web service via supervisord"
