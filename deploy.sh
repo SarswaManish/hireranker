@@ -182,7 +182,8 @@ API_ENV=$(echo "$COMMON_ENV" | jq \
   '. + [
     {"key":"ALLOWED_HOSTS","value":"hireranker-api.onrender.com"},
     {"key":"WEB_CONCURRENCY","value":"2"},
-    {"key":"CORS_ALLOWED_ORIGINS","value":"https://hireranker.vercel.app"}
+    {"key":"CORS_ALLOWED_ORIGINS","value":"https://hireranker.vercel.app"},
+    {"key":"CORS_ALLOWED_ORIGIN_REGEXES","value":"https://hireranker-[a-z0-9-]+\\.vercel\\.app,https://[a-z0-9-]+\\.vercel\\.app"}
   ]')
 
 # Render API v1 requires "env" (runtime) inside serviceDetails

@@ -29,8 +29,9 @@ SECURE_BROWSER_XSS_FILTER = True
 SECURE_CONTENT_TYPE_NOSNIFF = True
 X_FRAME_OPTIONS = 'DENY'
 
-# CORS — accept list from env (comma-separated Vercel/custom frontend URLs)
-CORS_ALLOWED_ORIGINS = config('CORS_ALLOWED_ORIGINS', default='', cast=Csv())
+# CORS — explicit origins + regex for Vercel preview deployments
+CORS_ALLOWED_ORIGINS = [o for o in config('CORS_ALLOWED_ORIGINS', default='', cast=Csv()) if o]
+CORS_ALLOWED_ORIGIN_REGEXES = [r for r in config('CORS_ALLOWED_ORIGIN_REGEXES', default='', cast=Csv()) if r]
 
 # ── File Storage ──────────────────────────────────────────────────────────────
 # Set USE_S3=true + AWS_* vars to enable S3.
