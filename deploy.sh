@@ -202,7 +202,7 @@ API_PAYLOAD=$(jq -n \
       "env": "python",
       "envSpecificDetails": {
         "buildCommand": "./build.sh",
-        "startCommand": "gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --threads 2 --timeout 120 --log-level info"
+        "startCommand": "supervisord -c supervisord.conf"
       },
       "healthCheckPath": "/api/health/",
       "numInstances": 1,
