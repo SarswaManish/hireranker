@@ -58,11 +58,20 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # ── Redis / Celery ─────────────────────────────────────────────────────────────
 # Upstash Redis URLs start with rediss:// (TLS).
-# Pass ssl_cert_reqs=None to avoid cert validation issues on Upstash free tier.
+# Django cache uses CONNECTION_POOL_KWARGS; Celery requires ssl_cert_reqs in the URL itself.
 _redis_url = REDIS_URL  # already set from base via decouple
 if _redis_url.startswith('rediss://'):
     _ssl_opts = {'ssl_cert_reqs': None}
     CACHES['default']['OPTIONS']['CONNECTION_POOL_KWARGS'].update(_ssl_opts)
+
+    # Append ssl_cert_reqs=CERT_NONE to Celery broker/backend URLs so the
+    # redis.py backend does not raise ValueError on startup.
+    def _add_ssl_param(url: str) -> str:
+        sep = '&' if '?' in url else '?'
+        return url if 'ssl_cert_reqs' in url else f'{url}{sep}ssl_cert_reqs=CERT_NONE'
+
+    CELERY_BROKER_URL = _add_ssl_param(CELERY_BROKER_URL)
+    CELERY_RESULT_BACKEND = _add_ssl_param(CELERY_RESULT_BACKEND)
 
 # Email
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
